@@ -164,6 +164,22 @@ class TSNetFreq(nn.Module):
         res = self.forward_head(dec_out)
         return res
 
+    def minft(self):
+        """
+        Apply minimal fine-tuning by freezing core backbone layers and 
+        enabling training only on embeddings, norm layers, and the projection head.
+        """
+        for name, param in self.named_parameters():
+            lname = name.lower()
+            if (
+                'embed' in lname
+                or 'norm' in lname
+                or 'head' in lname
+            ):
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+
 
 if __name__ == "__main__":
     configs = Configs(
