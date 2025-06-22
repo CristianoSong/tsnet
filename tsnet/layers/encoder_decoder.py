@@ -114,7 +114,7 @@ class TSNetDecoderBlock(nn.Module):
         return x + trend
 
 
-class TSNetDecoderStack(nn.Module):
+class TSNetDecoder(nn.Module):
     """
     A stack of decoder blocks for TSNet.
     """
@@ -133,4 +133,94 @@ class TSNetDecoderStack(nn.Module):
     def forward(self, x, enc_output=None):
         for block in self.blocks:
             x = block(x, enc_output)
+        return x
+
+
+class TransformerEncoderBlock(nn.Module):
+    """
+    A single Transformer encoder block: self-attention -> FFN with residuals and norms
+    """
+    def __init__(self, d_model, n_heads, dropout=0.1):
+        super().__init__()
+        self.self_attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, d_model * 4),
+            nn.GELU(),
+            nn.Linear(d_model * 4, d_model)
+        )
+
+    def forward(self, x):
+        """
+        Args:
+            x: encoder input with shape [B, L, D]
+        """
+        attn_out, _ = self.self_attn(x, x, x)
+        x = self.norm1(x + self.dropout(attn_out))
+        ffn_out = self.ffn(x)
+        x = self.norm2(x + self.dropout(ffn_out))
+        return x
+
+
+class TransformerEncoder(nn.Module):
+    """
+    A stack of Transformer encoder blocks.
+    """
+    def __init__(self, d_model, n_heads, n_layers=3, dropout=0.1):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            TransformerEncoderBlock(d_model, n_heads, dropout) for _ in range(n_layers)
+        ])
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        return x
+
+
+class TransformerDecoderBlock(nn.Module):
+    """
+    A single Transformer decoder block: self-attention -> cross-attention -> FFN with residuals and norms
+    """
+    def __init__(self, d_model, n_heads, dropout=0.1):
+        super().__init__()
+        self.self_attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
+        self.cross_attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, d_model * 4),
+            nn.GELU(),
+            nn.Linear(d_model * 4, d_model)
+        )
+
+    def forward(self, x, enc_output):
+        """
+        Args:
+            x: decoder input with shape [B, L, D]
+            enc_output: encoder output with shape [B, L_enc, D]
+        """
+        x = self.norm1(x + self.dropout(self.self_attn(x, x, x)[0]))
+        x = self.norm2(x + self.dropout(self.cross_attn(x, enc_output, enc_output)[0]))
+        x = self.norm3(x + self.dropout(self.ffn(x)))
+        return x
+
+
+class TransformerDecoder(nn.Module):
+    """
+    A stack of Transformer decoder blocks.
+    """
+    def __init__(self, d_model, n_heads, n_layers=1, dropout=0.1):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            TransformerDecoderBlock(d_model, n_heads, dropout) for _ in range(n_layers)
+        ])
+
+    def forward(self, x, enc_output):
+        for layer in self.layers:
+            x = layer(x, enc_output)
         return x

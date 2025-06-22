@@ -92,3 +92,23 @@ class ClassificationHead(nn.Module):
         else:
             return [torch.nonzero(row >= threshold, as_tuple=True)[0].tolist() for row in probs]
 
+    
+class PatchForecastingHead(nn.Module):
+    """
+    PatchForecastingHead projects TSNet patch embeddings to future time steps.
+    """
+    def __init__(self, d_model, pred_len):
+        super().__init__()
+        self.d_model = d_model
+        self.pred_len = pred_len
+        self.linear = None  # Initialized in forward
+
+    def forward(self, x):
+        # x: [B*C, N_patches, d_model]
+        B_C, N, D = x.shape
+        if self.linear is None:
+            self.linear = nn.Linear(D * N, self.pred_len).to(x.device)
+        x = x.transpose(1, 2).contiguous()  # [B*C, d_model, N]
+        x = x.view(B_C, -1)  # [B*C, d_model * N]
+        out = self.linear(x)  # [B*C, pred_len]
+        return out

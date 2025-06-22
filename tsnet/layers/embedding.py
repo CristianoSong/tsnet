@@ -6,6 +6,7 @@ Input embeddings include value embeddings, positional embeddings, and temporal e
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 class PositionalEmbedding(nn.Module):
     """
@@ -157,3 +158,81 @@ class DataEmbedding(nn.Module):
             return self.dropout(x_val + x_pos + x_time)
         else:
             return self.dropout(x_val + x_pos)
+
+class PatchEmbedding(nn.Module):
+    """
+    Applies patch segmentation and embedding for time series sequence.
+    Inspired by PatchTST. Each patch is projected to d_model, with positional and temporal encoding.
+    The patch embedding layer handles multi-channel inputs by channel independence.
+    Projection to d_model is on patch level, not channel level.
+
+    Args:
+        patch_len (int): Length of each patch.
+        stride (int): Stride between patches.
+        d_model (int): Dimension to project each patch into.
+        dropout (float): Dropout rate.
+        use_temporal (bool): Whether to include temporal embeddings.
+        embed_type (str): 'learned' or 'fixed' for temporal embeddings.
+    """
+    def __init__(self, patch_len, stride=0, d_model=256, dropout=0.1, use_temporal=True, embed_type='learned'):
+        super().__init__()
+        self.patch_len = patch_len
+        self.stride = stride or patch_len  # Default stride is patch_len
+        assert patch_len > 0, "patch_len must be positive"
+        self.d_model = d_model
+        self.use_temporal = use_temporal
+
+        self.patch_embedding = nn.Linear(patch_len, d_model)
+        self.position_embedding = PositionalEmbedding(d_model)
+        self.dropout = nn.Dropout(p=dropout)
+        self.num_patch = 0
+
+        if use_temporal:
+            self.temporal_embedding = TemporalEmbedding(d_model, embed_type)
+
+    def forward(self, x, x_mark=None):
+        """
+        Args:
+            x: Tensor of shape (B, L, C)
+            x_mark: Optional temporal marks of shape (B, L, 5)
+
+        Returns:
+            patch_tokens: Tensor of shape (B * C, N, d_model)
+            N: Number of patches per sequence
+        """
+        B, L, C = x.shape
+        N = (L - self.patch_len) // self.stride + 1
+        needed_len = (N - 1) * self.stride + self.patch_len
+        if L < needed_len:
+            pad_len = needed_len - L
+            x = F.pad(x, (0, 0, pad_len, 0))  # pad front on seq_len dim
+            if x_mark is not None:
+                x_mark = F.pad(x_mark, (0, 0, pad_len, 0))
+        elif (L - self.patch_len) % self.stride != 0:
+            # Truncate from front to ensure only valid full patches
+            new_L = (N - 1) * self.stride + self.patch_len
+            x = x[:, -new_L:, :]
+            if x_mark is not None:
+                x_mark = x_mark[:, -new_L:, :]
+
+        N = (x.shape[1] - self.patch_len) // self.stride + 1
+        self.num_patch = N
+
+        # Create patches: unfold produces (B, N, patch_len, C), then reshape to (B*C, N, patch_len)
+        patches = x.unfold(dimension=1, size=self.patch_len, step=self.stride)  # (B, N, C, patch_len)
+        patches = patches.permute(0, 2, 1, 3).contiguous()  # (B, C, N, patch_len)
+        B, C, N, P = patches.shape
+        patches = patches.view(B * C, N, P)  # (B*C, N, patch_len)
+
+        patch_tokens = self.patch_embedding(patches)  # (B*C, N, d_model)
+        patch_tokens = self.position_embedding(patch_tokens)
+
+        if self.use_temporal and x_mark is not None:
+            x_mark_patch = x_mark.unfold(dimension=1, size=self.patch_len, step=self.stride)  # (B, N, 5, patch_len)
+            mid_idx = self.patch_len // 2
+            x_mark_patch = x_mark_patch[:, :, :, mid_idx]  # (B, N, 5)
+            x_mark_patch = x_mark_patch.repeat_interleave(C, dim=0)  # (B*C, N, 5)
+            temporal_enc = self.temporal_embedding(x_mark_patch)
+            patch_tokens = patch_tokens + temporal_enc
+
+        return self.dropout(patch_tokens), N

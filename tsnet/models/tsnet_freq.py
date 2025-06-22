@@ -4,11 +4,11 @@ import torch.nn as nn
 from tsnet.layers.embedding import DataEmbedding
 from tsnet.layers.attention import FrequencyAttention
 from tsnet.layers.decomposition import MultiSeriesDecomposition
-from tsnet.layers.encoder_decoder import TSNetEncoder, TSNetDecoderStack
+from tsnet.layers.encoder_decoder import TSNetEncoder, TSNetDecoder
 from tsnet.layers.projection_head import ForecastingHead, ImputationHead, ClassificationHead
 
 
-class Configs:
+class TSNetFreqConfig:
     def __init__(self,
                  task='forecasting',
                  d_model=64,
@@ -61,7 +61,7 @@ class TSNetFreq(nn.Module):
     - B = batch size
     - C = number of output channels (equal to input channels if channel_independence=True)
     """
-    def __init__(self, configs: Configs):
+    def __init__(self, configs: TSNetFreqConfig):
         super().__init__()
         self.configs = configs
         input_dim = 1 if configs.channel_independence else configs.in_channels
@@ -82,7 +82,7 @@ class TSNetFreq(nn.Module):
             dropout=configs.dropout
         )
 
-        self.decoder = TSNetDecoderStack(
+        self.decoder = TSNetDecoder(
             d_model=configs.d_model,
             self_attn_fn=attn_layer,
             cross_attn_fn=attn_layer,
@@ -182,7 +182,7 @@ class TSNetFreq(nn.Module):
 
 
 if __name__ == "__main__":
-    configs = Configs(
+    configs = TSNetFreqConfig(
         task='forecasting',
         d_model=64,
         in_channels=1,
